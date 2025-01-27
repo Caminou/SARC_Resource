@@ -13,26 +13,13 @@ sys.path.append(str(Path(__file__).resolve().parent.parent / "utils"))
 import data_utils
 import plot_utils
 import network_utils
+
 from data_utils import load_data, process_redcap_data, merge_all_data
+
 from plot_utils import plot_unique_patients
 from network_utils import create_network_graph
 
 # --- STREAMLIT APP FUNCTIONS ---
-def show_data_table(df):
-    """Display the data table in the Streamlit UI."""
-    st.write("Full Dataset:")
-    st.dataframe(df)
-
-def sanity_check(df):
-    """Perform sanity checks and highlight inconsistencies."""
-    st.header("Sanity Check")
-    issues = df[(df["Gender"] == "Male") & (df["Sex"] == "F")]  # Example check
-    if not issues.empty:
-        st.warning("Found inconsistencies:")
-        st.dataframe(issues)
-    else:
-        st.success("No inconsistencies found!")
-
 # --- MAIN FUNCTION ---
 # Streamlit App
 def main():
@@ -58,7 +45,7 @@ def main():
 
     # Now you can use combined_df for further analysis
     st.header("Combined DataFrame:")
-    st.dataframe(combined_df)  # Corrected this line (removed parentheses)
+    st.dataframe(combined_df.head())  # Corrected this line (removed parentheses)
 
     # Set a Project-Patient Network
     st.header("Project-Patient Network")
@@ -74,6 +61,28 @@ def main():
 
     # Display the network in Streamlit
     st.components.v1.html(net.generate_html(), height=750)
+
+    ## Show Data from specific patient
+    pathology_ids = combined_df["Pathologic Diagnosis"].unique()
+    selected_pathology = st.selectbox("Select Pathology:", pathology_ids, key="patient_select")
+    st.session_state.selected_pathology = selected_pathology
+    # Filter data based on selected Patient ID
+    patient_df = combined_df[combined_df["Pathologic Diagnosis"] == selected_pathology]
+    patient_df = patient_df.dropna(axis=1, how="all")
+    # Display Patient Data
+    st.write(f"Data for the specific Pathology {selected_pathology}:")
+    st.dataframe(patient_df)
+    from data_utils import sanity_check
+    # Perform the sanity check on the filtered patient data
+    # Perform the sanity check  
+    inconsistencies = sanity_check(combined_df)
+    # # Display the results in Streamlit
+    if inconsistencies:
+        st.error(f"Found {len(inconsistencies)} inconsistencies.")
+        st.write("Details:")
+        st.json(inconsistencies)  # Use a JSON viewer for better display
+    else:
+        st.success("No inconsistencies found in the data!")
 
 # Run the Streamlit app
 if __name__ == "__main__":
