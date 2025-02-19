@@ -1,53 +1,82 @@
-
 import pandas as pd
-import matplotlib.pyplot as plt
 from pyvis.network import Network
 
-# Define a function to generate unique shades of green for each Data_Type
 def get_data_type_color(data_type):
-    # Define a list of green shades (from light to dark)
-    green_shades = {
-        "in-vitro_dosing": "#a8e6cf",  # Light Green
-        "WES": "#5eae60",              # Medium Green
-        "LongReadSeq": "#2d6a4f",      # Dark Green
-        "RNAseq": "#276749",           # Darker Green
-        "scRNAseq": "#9cc2a6",         # Light Green (choose a color)
-        "WTA Probe Sequencing": "#4b8c6f" # Custom color for this type
+    color_map = {
+        "in_vitro_dosing": "#aec7e1",
+        " in-vitro dosing": "#1f77b4",
+        "WES": "#f7b6d2",
+        "LongReadSeq": "#2ca02c",
+        "RNAseq": "#d62728",
+        "scRNAseq": "#9467bd",
+        "WTA Probe Sequencing": "#8c564b",
+        "WGS": "#e377c2",
+        "Oncomine Report": "#7f7f7f",
+        "CutandRun": "#bcbd22",
     }
-    # Default to a light green if the data_type is not listed
-    return green_shades.get(data_type, "#a8e6cf")  # Default to light green
+    return color_map.get(data_type, "#E0F2F7")
+
+def get_sample_type_color(sample_type):
+    color_map = {
+        "PDSC": "#aec7e1",
+        "Patient tumor": "#1f77b4",
+        "DTC": "#f7b6d2",
+        "blood": "#d62728",
+    }
+    return color_map.get(sample_type, "#E0F2F7")
 
 def create_network_graph(df):
-    # Initialize a Pyvis network
     net = Network(height="750px", width="100%", directed=True)
-    
-    # Define colors for other node types
-    patient_color = "skyblue"
+
+    patient_color = "lightgrey"
     project_color = "orange"
-    
-    # Add nodes and edges to the network
-    for _, row in df.iterrows():
+    no_sample_color = "lightblue"
+
+    # Make sure we include ALL unique Patient IDs even if Sample type is missing
+    unique_patients = df[["Project ID", "Patient ID"]].drop_duplicates()
+
+    for _, row in unique_patients.iterrows():
+        project_id = str(row["Project ID"])
+        patient_id = str(row["Patient ID"])
+
+        # Add Project and Patient nodes
+        net.add_node(patient_id, label=patient_id, title=patient_id, color=patient_color)
+        net.add_node(project_id, label=project_id, title=project_id, color=project_color, size=40)
+        net.add_edge(patient_id, project_id, color=patient_color)  # Patient → Project
+
+    # Grouping by Patient-Sample combination to reduce redundant edges
+    grouped_df = df.groupby(["Project ID", "Patient ID", "Sample type"])["Data_type"].unique().reset_index()
+
+    for _, row in grouped_df.iterrows():
         patient_id = str(row["Patient ID"])
         project_id = str(row["Project ID"])
-        data_type = str(row["Data_type"])
-        
-        # Add Patient and Project nodes
-        net.add_node(patient_id, label=patient_id, title=f"{patient_id}", color=patient_color)
-        net.add_node(project_id, label=project_id, title=f"{project_id}", color=project_color)
-        
-        # Get the color for this Data_Type using the mapping function
-        data_type_color = get_data_type_color(data_type)
-        
-        # Add Data_Type node for the patient with a unique color
-        data_type_node = f"{patient_id}_{data_type}"  # Create a unique ID for each Data_Type per Patient
-        net.add_node(data_type_node, label=data_type, title=f"{data_type}", color=data_type_color)
-        
-        # Create edges:
-        # - Between Patient and Project
-        net.add_edge(patient_id, project_id)
-        
-        # - Between Patient and Data_Type
-        net.add_edge(patient_id, data_type_node)
-   # Disable physics to stop nodes from shaking
-          # Disable physics to stop nodes from shaking
+        sample_type = str(row["Sample type"]) if pd.notna(row["Sample type"]) else "No Sample Info"
+        data_types = row["Data_type"]
+
+        # If Sample type is missing, create a placeholder node
+        if sample_type == "No Sample Info":
+            no_sample_node = f"{patient_id}_NoSample"
+            net.add_node(no_sample_node, label="No Sample Info", title=f"{patient_id} (No Sample)", color=no_sample_color)
+            net.add_edge(patient_id, no_sample_node, color=no_sample_color)
+
+            # If there are data types, connect them to "No Sample Info"
+            for data_type in data_types:
+                data_type_color = get_data_type_color(data_type)
+                data_type_node = f"{no_sample_node}_{data_type}"
+                net.add_node(data_type_node, label=data_type, title=f"{patient_id} - {data_type}", color=data_type_color)
+                net.add_edge(no_sample_node, data_type_node, color=data_type_color)
+
+        else:
+            # Normal case: Patient → Sample type → Data type
+            patient_sample_node = f"{patient_id}_{sample_type}"
+            sample_type_color = get_sample_type_color(sample_type)
+            net.add_node(patient_sample_node, label=sample_type, title=f"{patient_id} - {sample_type}", color=sample_type_color)
+            net.add_edge(patient_id, patient_sample_node, color=sample_type_color)
+
+            for data_type in data_types:
+                data_type_color = get_data_type_color(data_type)
+                data_type_node = f"{patient_sample_node}_{data_type}"
+                net.add_node(data_type_node, label=data_type, title=f"{patient_id} - {sample_type} - {data_type}", color=data_type_color)
+                net.add_edge(patient_sample_node, data_type_node, color=data_type_color)
+
     return net

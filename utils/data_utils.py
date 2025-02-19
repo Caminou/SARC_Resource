@@ -6,7 +6,8 @@ def load_data():
     patients = pd.read_csv("~/Database/patient_metadata.csv")
     data_metadata = pd.read_csv("~/Database/data_metadata.csv")
     redcap = pd.read_csv("~/Database/Redcap_metadata.csv", low_memory=False)
-    return patients, data_metadata, redcap
+    sample_metadata = pd.read_csv("~/Database/sample_metadata.csv")
+    return patients, data_metadata, redcap, sample_metadata
 
 # --- DATA PROCESSING FUNCTIONS ---
 
@@ -20,17 +21,19 @@ def process_redcap_data(redcap):
         (redcap["Repeat Instrument"] == "Treatment at Study Site")
     ]
     diagnosis_treatment = diagnosis_treatment.dropna(axis=1, how="all")
-
     merged = pd.merge(patient_info, diagnosis_treatment, on="REDCap Record ID")
+    
     final_df = pd.concat([patient_info, merged], ignore_index=True)
+    final_df = final_df.rename(columns={'REDCap Record ID': 'REDCAP ID'})
     return final_df
 
 # Merge all columns by Patient_ID, Redcap_record
-def merge_all_data(patients, final_df, data_metadata):
+def merge_all_data(patients, final_df, data_metadata, sample_metadata):
     """Merge patient and metadata into a single DataFrame."""
-    merged_df = pd.merge(patients, final_df, left_on="REDCAP ID", right_on="REDCap Record ID")
-    merged_df = merged_df.drop(columns=["REDCap Record ID"])
-    combined_df = pd.merge(merged_df, data_metadata, on="Patient ID")
+    merged_df = pd.merge(patients, final_df, on="REDCAP ID", how="outer")
+    combined_df = pd.merge(merged_df, data_metadata, on=["Patient ID"],how="outer")
+    combined_df = pd.merge(combined_df, sample_metadata, on=["Patient ID","Specimen ID","Sample ID"],how="outer")
+    combined_df = combined_df.dropna(subset=['Patient ID'])
     return combined_df
 
 # Determine if Sex and Race in patient and Redcap is the same
