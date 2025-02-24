@@ -91,92 +91,148 @@ def plot_samples_per_patient_with_color(data_metadata):
     else:
         st.warning("Columns 'Patient ID' or 'Sample ID' are missing in the dataset.")
         return None
-    
-def interactive_plot(combined_df):    
-    # Process the data for pie chart with percentage
-    disease_counts = combined_df['Pathologic Diagnosis'].value_counts().reset_index()
-    disease_counts.columns = ['Pathologic Diagnosis', 'Count']
 
-    # Calculate percentage
-    total_count = disease_counts['Count'].sum()
-    disease_counts['Percentage'] = (disease_counts['Count'] / total_count) * 100
-    disease_counts['Percentage'] = disease_counts['Percentage'].map('{:.1f}%'.format)
-    # Selection filter
-    disease_select = alt.selection_single(fields=["Pathologic Diagnosis"], empty="all")
 
-    # Create an Altair Pie Chart with Percentage Display
+def interactive_plot(combined_df): 
+    combined_df["Patient_Sample_Specimen"] = (
+        combined_df["Patient ID"].astype(str) + "_" +
+        combined_df["Sample ID"].astype(str) + "_" +
+        combined_df["Specimen ID"].astype(str) + "_" +
+        combined_df["Sample type"].astype(str)
+    )
+
+    # Filter dataset where repeat_instance == 1
+    filtered_df = combined_df[combined_df["Repeat Instance"] == 1]
+
+    # Count unique patients per pathology
+    disease_counts = (
+        filtered_df.groupby("Pathologic Diagnosis")["Patient ID"]
+        .nunique()
+        .reset_index()
+        .rename(columns={"Patient ID": "Unique Patients"})
+    )
+
+    # Calculate percentage and keep it numeric
+    total_count = disease_counts["Unique Patients"].sum()
+    disease_counts["Percentage"] = (disease_counts["Unique Patients"] / total_count) * 100  # Keep as float
+
+    # Selection filters
+    disease_select = alt.selection_single(fields=["Pathologic Diagnosis"], empty="all", name="DiagnosisFilter")
+    data_type_select = alt.selection_single(fields=["Data_type"], empty="all", name="DataTypeFilter")
+    sample_type_select = alt.selection_single(fields=["Sample type"], empty="all", name="SampleTypeFilter")
+    # Corrected Filtering Logic
+    filter_condition = (
+        (alt.datum["Pathologic Diagnosis"] == disease_select) | (disease_select)
+        ) & (
+            (alt.datum["Data_type"] == data_type_select) | (data_type_select)
+            )
+
+    # **Pie Chart (Pathologic Diagnosis)**
     disease_pie = (
         alt.Chart(disease_counts)
         .mark_arc(innerRadius=50)
         .encode(
-            theta=alt.Theta("Count:Q", title="Total Cases"),
+            theta=alt.Theta("Unique Patients:Q", title="Unique Patients"),
             color=alt.Color(
                 "Pathologic Diagnosis:N",
                 scale=alt.Scale(scheme="category20"),
-                legend=alt.Legend(title="Pathologic Diagnosis", orient="left")  # Custom legend title for Pathology
+                legend=alt.Legend(title="Pathologic Diagnosis (REDCAP)", orient="right"),
             ),
-            opacity=alt.condition(disease_select, alt.value(1), alt.value(0.3)),
+            opacity=alt.condition(
+                disease_select, alt.value(1), alt.value(0.3)
+            ),
             tooltip=[
-                "Pathologic Diagnosis:N",
-                "Percentage",
-                alt.Tooltip("Percentage:Q", format=".1f")]
+                "Pathologic Diagnosis:N", 
+                "Unique Patients:Q", 
+                alt.Tooltip("Percentage:Q", format=".1f")  # Ensure numeric format
+            ],
         )
         .add_selection(disease_select)
-        .properties(title="Pathologic Diagnosis Distribution", width=400, height=400)
+        .transform_filter(filter_condition)
+        .properties(title="Unique Patients per Pathologic Diagnosis", width=400, height=400)
     )
-    project_patient_counts = (
-        combined_df.groupby(["Pathologic Diagnosis", "Project ID", "Data_type"])["Patient ID"]
-        .nunique()  # Count unique patients
-        .reset_index()
-    )
-    # Rename columns for clarity
-    project_patient_counts.columns = ["Pathologic Diagnosis", "Project ID", "Data_type", "Number of Patients"]
 
-    # Summary Bar Chart (Filtered by Pie Selection)
+    # **Bar Chart (Data Type)**
+    project_patient_counts = (
+        filtered_df.groupby(["Pathologic Diagnosis", "Sample type", "Data_type"])["Patient_Sample_Specimen"]
+        .nunique()
+        .reset_index(name="Unique Patient_Sample_Specimen (Biosample)")
+    )
+
     datatype_summary = (
         alt.Chart(project_patient_counts)
         .mark_bar()
         .encode(
-            x=alt.X("Project ID:N", title="Project ID"),
-            y=alt.Y("Number of Patients:Q", title="Number of Patients"),
-            tooltip=["Project ID", "Number of Patients","Data_type"],
-            color=alt.Color("Data_type:N",
+            x=alt.X("Sample type:N", title="Sample type"),
+            y=alt.Y("Unique Patient_Sample_Specimen (Biosample):Q", title="Number of Samples"),
+            color=alt.Color(
+                "Data_type:N",
                 scale=alt.Scale(scheme="category20"),
-                legend=alt.Legend(title="Data_type", orient="left") 
-        ))
-        .transform_filter(disease_select)  # Apply the filter from the pie chart
-        .properties(title="Patients per Project (Filtered by Disease)", width=500)
+                legend=alt.Legend(title="Data Type", orient="right"),
+            ),
+            opacity=alt.condition(
+                data_type_select & sample_type_select, alt.value(1), alt.value(0.3)
+            ),
+            tooltip=["Sample type", "Unique Patient_Sample_Specimen (Biosample)", "Data_type"],
+        )
+        .add_selection(data_type_select)
+        .add_selection(sample_type_select)
+        .transform_filter(disease_select)
+        .properties(width=500, height=300)
     )
 
+    # **Treatment Summary**
+    # Define interactive selections for data type, sample type, and disease
+
+    # **Treatment Summary (Diagnosis_summary)**
     treatment = (
-        combined_df.groupby(["Pathologic Diagnosis", "Cancer treatment regimen 1"])["Patient ID"]
-        .nunique()  # Count unique patients
-        .reset_index()
+        combined_df
+        .groupby(["Pathologic Diagnosis", "Cancer treatment regimen 1","Data_type","Sample type"])["Patient_Sample_Specimen"]
+        .size()
+        .reset_index(name="Number of Patient_Sample_Specimen")
     )
-    # Rename columns for clarity
-    treatment.columns = ["Pathologic Diagnosis", "Treatment", "Number of Patients"]
 
-    # Summary Bar Chart (Filtered by Pie Selection)
+
     Diagnosis_summary = (
         alt.Chart(treatment)
         .mark_bar()
         .encode(
-            x=alt.X("Treatment:N", title="Treatment"),
-            y=alt.Y("Number of Patients:Q", title="Number of Patients"),
-            tooltip=["Treatment", "Number of Patients"],
-            color=alt.Color("Treatment:N",
-                scale=alt.Scale(scheme="category20"),
-                legend=alt.Legend(title="Treatment:N", orient="left"))
+            x=alt.X("Cancer treatment regimen 1:N", title="Treatment (REDCAP)"),
+            y=alt.Y("Number of Patient_Sample_Specimen:Q", title="Number of Patient_Sample_Specimen (Biosample)"),
+            color=alt.Color("Cancer treatment regimen 1:N", scale=alt.Scale(scheme="category20")),
+            tooltip=["Cancer treatment regimen 1", "Number of Patient_Sample_Specimen"],
         )
-        .transform_filter(disease_select)  # Apply the filter from the pie chart
-        .properties(title="Patients per Project (Filtered by Disease)", width=500)
+        .transform_filter(data_type_select & sample_type_select & disease_select)
+        .properties(width=500)
     )
-    ## Merge all plots at the same time
-    chart_row = (disease_pie | datatype_summary).resolve_scale(
-        color='independent'  # Crucial: Make the color scales independent
-    )
-    chart_row = (chart_row & Diagnosis_summary).resolve_scale(
-        color="independent"
-        )
 
-    return(chart_row)
+    # **Mismatch Data Plot**
+
+    Mismatch_data = (
+        combined_df
+        .groupby(["Pathologic Diagnosis", "Diagnosis","Data_type","Sample type"])["Patient_Sample_Specimen"]
+        .nunique()
+        .reset_index(name="Unique Patient_Sample_Specimen (Biosample)")
+    )
+
+    Mismatch_plot = (
+        alt.Chart(Mismatch_data)
+        .mark_bar()
+        .encode(
+            x=alt.X("Pathologic Diagnosis:N", title="Pathologic Diagnosis (REDCAP)"),
+            y=alt.Y("Diagnosis:N", title="Diagnosis (WXY lab)"),
+            color=alt.Color("Diagnosis:N", scale=alt.Scale(scheme="category20")),
+            tooltip=["Pathologic Diagnosis", "Diagnosis"],
+        )
+        .transform_filter(data_type_select & sample_type_select & disease_select)
+        .properties(width=500)
+    )
+    # **Merge all plots**
+    
+    chart_row = (disease_pie | datatype_summary).resolve_scale(color='independent')
+    chart_row1 = (Diagnosis_summary | Mismatch_plot).resolve_scale(color="independent")
+    final_chart = (chart_row & chart_row1).resolve_scale(color="independent")
+
+    return final_chart
+
+

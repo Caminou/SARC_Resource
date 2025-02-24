@@ -56,7 +56,7 @@ def main():
     raw_samples = combined_df[combined_df['File type'] != 'Analysed Files']  # All other entries are considered raw
 
     st.write("Resource is composed by Tumor biopsies:", len(patient_biopsy_combinations), "samples from ", patient_biopsy_combinations["Patient ID"].nunique(), 
-             "patient and ",len(cell_line_combinations), "Cell line samples from ",cell_line_combinations["Patient ID"].nunique())
+             "patient and ",len(cell_line_combinations), "Cell line samples from ",cell_line_combinations["Patient ID"].nunique(), " Cell lines.")
     st.write(len(analyzed_samples)," total analyzed sample combinations.")
     st.write(len(raw_samples)," total raw sample combinations.")
    
@@ -78,6 +78,16 @@ def main():
     st.header("Patients with RedCap information:")
     st.write("Current Resource Database is formed by ",combined_df[combined_df["Sample type"] != "Cancer cell line"][["Patient ID"]].nunique()["Patient ID"] ,"and ", combined_df[combined_df["Sample type"] != "Cancer cell line"][["REDCAP ID"]].nunique()["REDCAP ID"]," of them have REDCAP data associated ID")
     st.altair_chart(interactive_plot(combined_df))
+
+    combined_df["Patient_Sample_Specimen"] = (
+        combined_df["Patient ID"].astype(str) + "_" +
+        combined_df["Sample ID"].astype(str) + "_" +
+        combined_df["Specimen ID"].astype(str) + "_" +
+        combined_df["Sample type"].astype(str))
+    # Filter dataset where repeat_instance == 1
+    filtered_df = combined_df[combined_df["Repeat Instance"] == 1]
+    filtered_df = filtered_df[filtered_df["Sample "]]
+    st.dataframe(filtered_df)
 # Run the Streamlit app
 if __name__ == "__main__":
     main()
