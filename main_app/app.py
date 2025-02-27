@@ -9,12 +9,18 @@ import plotly.graph_objects as go
 from pyvis.network import Network
 import altair as alt
 import tempfile 
+import pdb
 
 ### Authentification process
 
 
 # Add the utils folder to the Python path
 sys.path.append(str(Path(__file__).resolve().parent.parent / "utils"))
+def divide (a,b):
+    pdb.set_trace()
+    return a / b
+result = divide(10,2)
+print(result)
 
 # Import the modules
 import data_utils
@@ -56,7 +62,7 @@ def main():
     raw_samples = combined_df[combined_df['File type'] != 'Analysed Files']  # All other entries are considered raw
 
     st.write("Resource is composed by Tumor biopsies:", len(patient_biopsy_combinations), "samples from ", patient_biopsy_combinations["Patient ID"].nunique(), 
-             "patient and ",len(cell_line_combinations), "Cell line samples from ",cell_line_combinations["Patient ID"].nunique(), " Cell lines.")
+             "patients and ",len(cell_line_combinations), "Cell line samples from ",cell_line_combinations["Patient ID"].nunique(), " Cell lines.")
     st.write(len(analyzed_samples)," total analyzed sample combinations.")
     st.write(len(raw_samples)," total raw sample combinations.")
    
