@@ -11,17 +11,10 @@ import altair as alt
 import tempfile 
 import pdb
 
-### Authentification process
-
-
+### Authentification proces
 # Add the utils folder to the Python path
-sys.path.append(str(Path(__file__).resolve().parent.parent / "utils"))
-def divide (a,b):
-    pdb.set_trace()
-    return a / b
-result = divide(10,2)
-print(result)
-
+utils_path = Path(__file__).resolve().parents[1] / "utils"
+sys.path.append(str(utils_path))
 # Import the modules
 import data_utils
 import plot_utils
