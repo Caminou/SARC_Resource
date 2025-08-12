@@ -45,13 +45,13 @@ def create_network_graph(df):
         net.add_edge(patient_id, project_id, color=patient_color)  # Patient → Project
 
     # Grouping by Patient-Sample combination to reduce redundant edges
-    grouped_df = df.groupby(["Project ID", "Patient ID", "Sample type"])["Data_type"].unique().reset_index()
+    grouped_df = df.groupby(["Project ID", "Patient ID", "Sample type"])["Data Type"].unique().reset_index()
 
     for _, row in grouped_df.iterrows():
         patient_id = str(row["Patient ID"])
         project_id = str(row["Project ID"])
         sample_type = str(row["Sample type"]) if pd.notna(row["Sample type"]) else "No Sample Info"
-        data_types = row["Data_type"]
+        data_types = row["Data Type"]
 
         # If Sample type is missing, create a placeholder node
         if sample_type == "No Sample Info":

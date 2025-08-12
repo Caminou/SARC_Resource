@@ -10,6 +10,11 @@ from pyvis.network import Network
 import altair as alt
 import tempfile 
 import pdb
+import openai
+import textwrap
+import plotly.express as px
+import io
+import textwrap
 
 ### Authentification proces
 # Add the utils folder to the Python path
@@ -20,7 +25,7 @@ import data_utils
 import plot_utils
 import network_utils
 
-from data_utils import load_data, process_redcap_data, merge_all_data, sanity_check
+from data_utils import load_data
 from plot_utils import plot_unique_patients, plot_samples_per_patient_with_color, plot_diagnosis_boxplot, interactive_plot
 from network_utils import create_network_graph, get_data_type_color
 
@@ -29,44 +34,27 @@ from network_utils import create_network_graph, get_data_type_color
 # --- MAIN FUNCTION ---
 # Streamlit App
 def main():
-
     # Set header and description
     st.title("Sarcoma Resource")
     
     # Load your data
     # Step 1: Load Data
-    patients, data_metadata, redcap, sample_metadata = load_data()
+    patients, data_files, redcap = load_data()
 
     # Check if data is loaded successfully
     if patients is None or data_metadata is None or redcap is None:
         st.error("Error loading data. Exiting...")
         return
-    # Step 2: Process REDCap Data
-    final_df = process_redcap_data(redcap)
-    
-    # Step 3: Merge All Data
-    combined_df = merge_all_data(patients, final_df, data_metadata, sample_metadata)
-    # Now you can use combined_df for further analysis
-    unique_combinations = combined_df[["Patient ID", "Specimen ID", "Sample ID"]].drop_duplicates()
-    cell_line_combinations = combined_df[combined_df["Sample type"] == "Cancer cell line"][["Patient ID", "Specimen ID", "Sample ID"]].drop_duplicates()
-    patient_biopsy_combinations=combined_df[combined_df["Sample type"] != "Cancer cell line"][["Patient ID", "Specimen ID", "Sample ID"]].drop_duplicates()
-    analyzed_samples = combined_df[combined_df['File type'] == 'Analysed Files']
-    cell_line_samples =combined_df[combined_df['Sample type'] == "PDC"]
-    raw_samples = combined_df[combined_df['File type'] != 'Analysed Files']  # All other entries are considered raw
 
-    st.write("Resource is composed by Tumor biopsies:", len(patient_biopsy_combinations), "samples from ", patient_biopsy_combinations["Patient ID"].nunique(), 
-             "patients and ",len(cell_line_combinations), "Cell line samples from ",cell_line_combinations["Patient ID"].nunique(), " Cell lines.")
-    st.write(len(analyzed_samples)," total analyzed sample combinations.")
-    st.write(len(raw_samples)," total raw sample combinations.")
-   
+    
     st.header("Combined DataFrame:")
-    st.dataframe(combined_df)  # Corrected this line (removed parentheses)
+    st.dataframe(data_files)  # Corrected this line (removed parentheses)
 
     # Set a Project-Patient Network
     st.header("Sarcoma Resource Network: Mapping Patient-Project Connections")
 
     # Create a DataFrame for the network
-    df = pd.DataFrame(combined_df[["Patient ID", "Project ID", "Data_type","Sample type"]])
+    df = pd.DataFrame(data_files[["Patient ID", "Project ID", "Data_type","Sample type"]])
     # Create and render the network graph
     net = create_network_graph(df)
     # Save the network graph as an HTML file
@@ -75,18 +63,59 @@ def main():
     st.components.v1.html(net.generate_html(), width=900, height=750)  # Use iframe
 # Create interactive
     st.header("Patients with RedCap information:")
-    st.write("Current Resource Database is formed by ",combined_df[combined_df["Sample type"] != "Cancer cell line"][["Patient ID"]].nunique()["Patient ID"] ,"and ", combined_df[combined_df["Sample type"] != "Cancer cell line"][["REDCAP ID"]].nunique()["REDCAP ID"]," of them have REDCAP data associated ID")
-    st.altair_chart(interactive_plot(combined_df))
+    st.write("Current Resource Database is formed by ",data_files[data_files["Sample type"] != "Cancer cell line"][["Patient ID"]].nunique()["Patient ID"] ,"and ", combined_df[combined_df["Sample type"] != "Cancer cell line"][["REDCAP ID"]].nunique()["REDCAP ID"]," of them have REDCAP data associated ID")
+    st.altair_chart(interactive_plot(data_files))
 
-    combined_df["Patient_Sample_Specimen"] = (
-        combined_df["Patient ID"].astype(str) + "_" +
-        combined_df["Sample ID"].astype(str) + "_" +
-        combined_df["Specimen ID"].astype(str) + "_" +
-        combined_df["Sample type"].astype(str))
-    # Filter dataset where repeat_instance == 1
-    filtered_df = combined_df[combined_df["Repeat Instance"] == 1]
-    filtered_df = filtered_df[filtered_df["Sample "]]
-    st.dataframe(filtered_df)
+    data_files["Patient_Sample_Specimen"] = (
+        data_files["Patient ID"].astype(str) + "_" +
+        data_files["Sample ID"].astype(str) + "_" +
+        data_files["Specimen ID"].astype(str) + "_" +
+        data_files["Sample type"].astype(str))
+    
+
+
+    # Set up OpenAI API key --> Function generator
+    openai.api_key = st.secrets["openai"]["api_key"]
+    st.title("🧠 Clinical Metadata Plot Generator")
+    # Load existing dataframe from session or app context (already called combined_df)
+    # Assuming combined_df is defined globally before this script or imported
+    def generate_plot_code(prompt, df_columns):
+        column_list = ", ".join(df_columns)
+        full_prompt = textwrap.dedent(f"""
+        You are a data scientist. Given a dataframe named `combined_df` with the following columns:
+        {column_list}
+        Write Python code using Plotly Express and Streamlit to create a visualization as requested by the user below.
+        Do NOT load or define a dataframe; assume `combined_df` is already available.
+        Only return code. No explanations.
+
+        User request: {prompt}
+        """)
+
+        response = openai.ChatCompletion.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "system", "content": "You are a helpful Python and Plotly assistant."},
+                {"role": "user", "content": full_prompt}
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+        return response.choices[0].message.content.strip()
+
+    # --- User Input ---
+
+    ### function generator
+    st.header("Ask ChatGPT to Generate a Plot")
+    user_prompt = st.text_input("What would you like to visualize?", placeholder="e.g., Bar chart of sex distribution")
+    if user_prompt:
+        with st.spinner("Generating visualization code with ChatGPT..."):
+            try:
+                code = generate_plot_code(user_prompt, data_files.columns)
+                st.code(code, language="python")
+                exec_globals = {"combined_df": data_files, "st": st, "px": px, "textwrap": textwrap}
+                exec(code, exec_globals)
+            except Exception as e:
+                st.error(f"Error executing generated code: {e}")
 # Run the Streamlit app
 if __name__ == "__main__":
     main()

@@ -1,95 +1,394 @@
 import pandas as pd
-### DATA LOADING FUNCTIONS 
+from pyvis.network import Network
+import pandas as pd
+import matplotlib.pyplot as plt
+import re
 
+  # return original if no match
+
+### DATA LOADING FUNCTIONS =
 def load_data():
-    """Load and return datasets."""
-    patients = pd.read_csv("~/Database/patient_metadata.csv")
-    data_metadata = pd.read_csv("~/Database/data_metadata.csv")
-    redcap = pd.read_csv("~/Database/Redcap_metadata.csv", low_memory=False)
-    sample_metadata = pd.read_csv("~/Database/sample_metadata.csv")
-    return patients, data_metadata, redcap, sample_metadata
+    #### = Load data_metadata = ####
+    import pandas as pd
+    import glob
+    import os
+    import re
 
-# --- DATA PROCESSING FUNCTIONS ---
+    def standardize_to_hSC(value):
+        match = re.search(r'h(\d+)', str(value), re.IGNORECASE)
+        if match:
+            return f"hSC{match.group(1)}"
+        return value
 
-def process_redcap_data(redcap):
-    """Clean and split the REDCap data."""
-    patient_info = redcap[~redcap["Repeat Instrument"].isin(["Diagnosis Information at Study Site", "Treatment at Study Site"])]
-    patient_info = patient_info.dropna(axis=1, how="all")
+    # Get all CSV file paths
+    csv_files = glob.glob(os.path.join("/mnt/c/Users/caminorsm/Desktop/Database/updated/data_metadata/data_metadata", "*.csv"))
+    # Read and concatenate all CSVs
+    data_metadata = pd.concat((pd.read_csv(f) for f in csv_files), ignore_index=True)
+    data_metadata = data_metadata.replace("NaN", "")
 
-    diagnosis_treatment = redcap[
-        (redcap["Repeat Instrument"] == "Diagnosis Information at Study Site") |
-        (redcap["Repeat Instrument"] == "Treatment at Study Site")
-    ]
-    diagnosis_treatment = diagnosis_treatment.dropna(axis=1, how="all")
-    merged = pd.merge(patient_info, diagnosis_treatment, on="REDCap Record ID")
+    # Some data modification for small mistakes
+    data_metadata['Data Type'] = data_metadata['Data Type'].str.replace('in_vitro_dosing', 'in-vitro dosing', regex=False)
+    data_metadata['Data Type'] = data_metadata['Data Type'].str.replace(' in-vitro dosing', 'in-vitro dosing', regex=False)
+    data_metadata["Lab ID"] = data_metadata["Lab ID"].apply(standardize_to_hSC)
     
-    final_df = pd.concat([patient_info, merged], ignore_index=True)
-    final_df = final_df.rename(columns={'REDCap Record ID': 'REDCAP ID'})
-    return final_df
+    # Read sample_metadata (Sample_type (PDSC, tumor_frozen, FFP...))
+    sample_metadata = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/sample_metadata.csv")
+    sample_metadata = sample_metadata.replace("NaN", "")
+    sample_metadata["Lab ID"] = sample_metadata["Lab ID"].apply(standardize_to_hSC)
 
-# Merge all columns by Patient_ID, Redcap_record
-def merge_all_data(patients, final_df, data_metadata, sample_metadata):
-    """Merge patient and metadata into a single DataFrame."""
-    merged_df = pd.merge(patients, final_df, on="REDCAP ID", how="outer")
-    combined_df = pd.merge(merged_df, data_metadata, on=["Patient ID"],how="outer")
-    combined_df = pd.merge(combined_df, sample_metadata, on=["Patient ID","Specimen ID","Sample ID"],how="outer")
-    combined_df = combined_df.dropna(subset=['Patient ID'])
-    return combined_df
 
-# Determine if Sex and Race in patient and Redcap is the same
-def sanity_check(df, id_col="Patient ID"):
-    """Check for inconsistencies in the patient data."""
-    inconsistencies = []
-    
-    # Define the required mappings for Gender and Sex
-    gender_sex_mapping = {"Female": "F", "Male": "M"}
-    
-    # Iterate through each row of the DataFrame
-    for _, row in df.iterrows():
-        # Extract the Patient ID for reference
-        patient_id = row.get(id_col, "Unknown")
-        
-        # Safely handle Gender
-        gender = row.get("Gender", "")
-        gender = str(gender).strip() if not pd.isna(gender) else ""
-        
-        # Safely handle Sex
-        sex = row.get("Sex", "")
-        sex = str(sex).strip() if not pd.isna(sex) else ""
-        
-        # Safely handle Race_x
-        race_x = row.get("Race_x", "")
-        race_x = str(race_x).strip() if not pd.isna(race_x) else ""
-        
-        # Safely handle Race_y
-        race_y = row.get("Race_y", "")
-        race_y = str(race_y).strip() if not pd.isna(race_y) else ""
-        
-        # --- Perform Checks ---
-        # Check Gender vs. Sex mismatch
-        if gender and sex:
-            expected_sex = gender_sex_mapping.get(gender, "")
-            if expected_sex and sex != expected_sex:
-                inconsistencies.append({
-                    "Patient ID": patient_id,
-                    "Issue": "Gender vs. Sex mismatch",
-                    "Details": f"Gender: {gender}, Sex: {sex} (expected: {expected_sex})"
-                })
-        
-        # Check Race_x vs. Race_y mismatch
-        if race_x and race_y and race_x != race_y:
-            inconsistencies.append({
-                "Patient ID": patient_id,
-                "Issue": "Race_x vs. Race_y mismatch",
-                "Details": f"Race_x: {race_x}, Race_y: {race_y}"
-            })
-    
-    # --- Log Results ---
-    if inconsistencies:
-        print(f"Found {len(inconsistencies)} inconsistencies:")
-        for inc in inconsistencies:
-            print(f"Patient ID: {inc['Patient ID']}, Issue: {inc['Issue']}, Details: {inc['Details']}")
-    else:
-        print("No inconsistencies found.")
+ #### = CREATE REDCAP DATA FILE = ####
+    # Read patient metadata (hSC number, REDCAP ID, NCCS, omics)
+    patients = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/mapper.csv")
+    patients = patients.replace("NaN", "")
+    # Matching sheet (sample_ID, Redcap, hSC number + establishment of PDSC + biopsy date)
+    PDSC = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/Patient_Metadata_Matching_Sheet.csv")
+    # Rename column names to match redcap column names
+    PDSC = PDSC.rename(columns={'Redcap Number': 'REDCAP ID'})
+    PDSC = PDSC.rename(columns={'NCCS number/ID': 'Patient ID'})
+    PDSC = PDSC.replace("NaN", "")
+    ## Get only the samples which model has been generated
 
-    return inconsistencies
+    PDSC['REDCAP ID'] = PDSC['REDCAP ID'].astype(str)
+
+    # Read redcap data (Demographics, Diagnosis and Treatment)
+    redcap = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/redcap.csv", low_memory=False)
+    redcap = redcap.replace("NaN", "")
+    # Map Redcap_ID with the hSC
+    redcap = redcap.rename(columns={'REDCap Record ID': 'REDCAP ID'})
+
+    ### REDCAP WITH FIXED DATES
+    temp = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/NCCSDMOSarcomaMelano-SarcomaUpdatedRecord_DATA_LABELS_2025-04-02_1334_unlocked.csv", nrows=0)
+    date_cols = [col for col in temp.columns if "date" in col.lower()]
+
+    # Function to apply uniform parsing
+    def custom_date_parser(x):
+        try:
+            return pd.to_datetime(x, format="%d/%m/%Y", errors="coerce")
+        except Exception:
+            return pd.NaT
+
+    # Load full file
+    sarcoma_fixed_dates = pd.read_csv(
+        "/mnt/c/Users/caminorsm/Desktop/Database/updated/NCCSDMOSarcomaMelano-SarcomaUpdatedRecord_DATA_LABELS_2025-04-02_1334_unlocked.csv",
+        low_memory=False
+    )
+
+    # Rename for consistency
+    sarcoma_fixed_dates = sarcoma_fixed_dates.rename(columns={"REDCap Record ID": "REDCAP ID"})
+
+    # Parse all detected date columns with consistent format
+    for col in date_cols:
+        sarcoma_fixed_dates[col] = sarcoma_fixed_dates[col].apply(custom_date_parser)
+    sarcoma_fixed_dates = sarcoma_fixed_dates.replace("NaN", "")
+
+    # Harmonize index types in both dataframes
+    for df in [redcap, sarcoma_fixed_dates]:
+        df["REDCAP ID"] = df["REDCAP ID"].astype(str).str.strip()
+        # DO NOT fill NaNs yet; preserve them for logic
+        df["Repeat Instrument"] = df["Repeat Instrument"].astype(str).str.strip()
+        # Keep Repeat Instance as-is, maybe cast to float to support NaN + ints
+        df["Repeat Instance"] = pd.to_numeric(df["Repeat Instance"], errors="coerce")
+
+    ### === UPDATE CORRECT DATES === ###
+    # Step 1: Set multi-index on both DataFrames
+    index_cols = ["REDCAP ID", "Repeat Instrument", "Repeat Instance"]
+    redcap_indexed = redcap.set_index(index_cols)
+    dates_indexed = sarcoma_fixed_dates.set_index(index_cols)
+
+    # Step 2: Identify shared date-related columns
+    date_cols = [col for col in redcap.columns if "date" in col.lower()]
+    date_cols_sarcoma = [col for col in sarcoma_fixed_dates.columns if "date" in col.lower()]
+    shared_date_cols = list(set(date_cols).intersection(date_cols_sarcoma))
+    shared_date_cols
+    # Step 3: Find overlapping row indices
+    shared_index = redcap_indexed.index.intersection(dates_indexed.index)
+
+    # Step 4: Update only those rows and columns
+    redcap_indexed.loc[shared_index, shared_date_cols] = dates_indexed.loc[shared_index, shared_date_cols]
+    redcap_indexed=redcap_indexed.reset_index()
+    # Step 5: Reset index if needed
+    redcap = redcap_indexed
+
+    def process_redcap_data(redcap):
+        # Drop fully empty columns
+        redcap_clean = redcap.dropna(axis=1, how='all')
+        # Split demographics info (when Repeat Instrument is NaN)
+        patient_info = redcap_clean[redcap_clean["Repeat Instrument"] == "nan"].copy()
+        # Split diagnosis/treatment rows
+        diagnosis_treatment = redcap_clean[
+            redcap_clean["Repeat Instrument"].isin([
+                "Diagnosis Information at Study Site",
+                "Treatment at Study Site"
+            ])
+        ].copy()
+        # Drop fully empty columns in diagnosis/treatment
+        diagnosis_treatment = diagnosis_treatment.dropna(axis=1, how='all')
+        # Merge to add patient_info to diagnosis/treatment rows
+        # Only keep columns from redcap_clean (i.e., original set of 307 columns)
+        merged = diagnosis_treatment.merge(
+            patient_info.drop(columns=["Repeat Instrument"]),  # don't override 'Repeat Instrument'
+            on="REDCAP ID",
+            how="left",
+            suffixes=("", "_demo")  # prevent _x/_y
+        )
+        # Fill missing demographic columns in diagnosis_treatment using patient_info 
+        for col in patient_info.columns:
+            if col != "REDCAP ID" and col in merged.columns and col + "_demo" in merged.columns:
+                merged[col] = merged[col].combine_first(merged[col + "_demo"])
+                merged = merged.drop(columns=[col + "_demo"])
+        # Now combine all: demographics + enriched diagnosis/treatment
+        final = pd.concat([patient_info, merged], ignore_index=True)
+        # Keep only columns from redcap_clean (i.e., 307 columns)
+        final = final[redcap_clean.columns]
+        return final
+
+    redcap = process_redcap_data(redcap)
+
+    ### == Reorder columns == ###
+    index_cols = ["REDCAP ID", "Repeat Instrument", "Repeat Instance"]
+
+    # Get all columns except these index columns
+    other_cols = [col for col in redcap.columns if col not in index_cols]
+
+    # Reorder columns
+    redcap = redcap[index_cols + other_cols]
+
+
+
+    patients = PDSC.merge(patients,left_on=["Patient ID"], 
+                                    right_on=["Patient ID"],
+                                    how="left")
+
+    patients = patients.drop(columns=["REDCAP ID_x"])
+
+    # Rename 'REDCAP ID_y' to 'REDCAP ID'
+    patients = patients.rename(columns={"REDCAP ID_y": "REDCAP ID"})
+    redcap = patients.merge(redcap,left_on=["REDCAP ID"], 
+                                    right_on=["REDCAP ID"],
+                                    how="left")
+
+    # drop empty redcap columns to reduce size of the table
+    redcap = redcap.dropna(axis=1, how="all")
+
+ #### == FIX correct diagnosis and grade for the Lab ID == ##
+    def get_final_diagnosis(path_diag, comp_path_diag):
+        if path_diag == "Others":
+            if pd.isna(comp_path_diag) or comp_path_diag.strip() == "":
+                return "Others"
+            else:
+                return comp_path_diag
+        return path_diag
+
+    def assign_final_diagnosis(df):
+        diag_df = df[df['Repeat Instrument'] == 'Diagnosis Information at Study Site'].copy()
+
+        # Convert dates
+        diag_df['Date of Final Pathologic Diagnosis'] = pd.to_datetime(
+            diag_df['Date of Final Pathologic Diagnosis'], errors='coerce', dayfirst=True
+        )
+        diag_df['Resection Date'] = pd.to_datetime(
+            diag_df['Resection Date'], errors='coerce', dayfirst=True
+        )
+
+        # Fix possibly flipped dates
+        diag_df['Date of Final Pathologic Diagnosis'] = [
+            patho_date
+            for patho_date, resection_date in zip(
+                diag_df['Date of Final Pathologic Diagnosis'], diag_df['Resection Date']
+            )
+        ]
+
+        final_diagnosis = {}
+
+        for lab_id, group in diag_df.groupby('Lab ID'):
+            unique_diag = group[['Pathologic Diagnosis', 'Composite Pathologic Diagnosis']].drop_duplicates()
+
+            # Case 1: Only one diagnosis — use it
+            if len(unique_diag) == 1:
+                row = unique_diag.iloc[0]
+                diagnosis = get_final_diagnosis(row['Pathologic Diagnosis'], row['Composite Pathologic Diagnosis'])
+                final_diagnosis[lab_id] = diagnosis
+                continue
+
+            # Case 2: Multiple diagnoses
+            group = group.copy()
+            group['TimeDiff'] = (group['Date of Final Pathologic Diagnosis'] - group['Resection Date']).dt.days
+
+            after_resection = group[group['TimeDiff'] >= 0]
+            before_resection = group[group['TimeDiff'] < 0]
+
+            if not after_resection.empty:
+                # Get closest after or on the same day
+                closest_row = after_resection.loc[after_resection['TimeDiff'].idxmin()]
+                post_flag = False
+            elif not before_resection.empty:
+                # Get closest before and flag as "POST"
+                closest_row = before_resection.loc[before_resection['TimeDiff'].idxmax()]
+                post_flag = True
+            else:
+                final_diagnosis[lab_id] = None
+                continue
+
+            diagnosis = get_final_diagnosis(
+                closest_row['Pathologic Diagnosis'],
+                closest_row['Composite Pathologic Diagnosis']
+            )
+
+            if post_flag:
+                diagnosis += " POST"
+
+            final_diagnosis[lab_id] = diagnosis
+        # Assign the results back
+        df['Diagnosis_final'] = df['Lab ID'].map(final_diagnosis)
+        return df
+
+    def assign_final_grade(df):
+        diag_df = df[df['Repeat Instrument'] == 'Diagnosis Information at Study Site'].copy()
+
+        # Convert dates
+        diag_df['Date of Final Pathologic Diagnosis'] = pd.to_datetime(
+            diag_df['Date of Final Pathologic Diagnosis'], errors='coerce', dayfirst=True
+        )
+        diag_df['Resection Date'] = pd.to_datetime(
+            diag_df['Resection Date'], errors='coerce', dayfirst=True
+        )
+
+        # Fix possibly flipped dates
+        diag_df['Date of Final Pathologic Diagnosis'] = [
+            patho_date
+            for patho_date, resection_date in zip(
+                diag_df['Date of Final Pathologic Diagnosis'], diag_df['Resection Date']
+            )
+        ]
+
+        final_diagnosis = {}
+
+        for lab_id, group in diag_df.groupby('Lab ID'):
+            unique_diag = group[['Pathologic Grade (FNCLCC)']].drop_duplicates()
+
+            # Case 1: Only one diagnosis — use it
+            if len(unique_diag) == 1:
+                row = unique_diag.iloc[0]
+                diagnosis =row["Pathologic Grade (FNCLCC)"]
+                final_diagnosis[lab_id] = diagnosis
+                continue
+
+            # Case 2: Multiple diagnoses
+            group = group.copy()
+            group['TimeDiff'] = (group['Date of Final Pathologic Diagnosis'] - group['Resection Date']).dt.days
+
+            after_resection = group[group['TimeDiff'] >= 0]
+            before_resection = group[group['TimeDiff'] < 0]
+            if not after_resection.empty:
+                # Get closest after or on the same day
+                closest_row = after_resection.loc[after_resection['TimeDiff'].idxmin()]
+                post_flag = False
+            elif not before_resection.empty:
+                # Get closest before and flag as "POST"
+                closest_row = before_resection.loc[before_resection['TimeDiff'].idxmax()]
+                post_flag = True
+            else:
+                final_diagnosis[lab_id] = None
+                continue
+
+            diagnosis = closest_row['Pathologic Grade (FNCLCC)']
+            if post_flag:
+                diagnosis += " POST"
+
+            final_diagnosis[lab_id] = diagnosis
+        # Assign the results back
+        df['Grade_final'] = df['Lab ID'].map(final_diagnosis)
+        return df
+    
+    diagnosis_rows = redcap[redcap["Repeat Instrument"] == "Diagnosis Information at Study Site"].copy()
+
+    ## FIX Diagnosis information
+    diagnosis_rows = diagnosis_rows.dropna(axis=1, how="all")
+    diagnosis_fix = assign_final_diagnosis(diagnosis_rows)
+    diagnosis_fix = assign_final_grade(diagnosis_fix)
+    final_diagnosis_df = diagnosis_fix[['Lab ID', 'Diagnosis_final','Grade_final']].drop_duplicates()
+    # Merge into redcap_df on Lab ID
+    redcap = redcap.merge(final_diagnosis_df, on='Lab ID', how='left')
+
+    # Convert date columns if not already done
+    redcap['Resection Date'] = pd.to_datetime(redcap['Resection Date'], errors='coerce', dayfirst=True)
+    redcap['Chemotherapy Start Date'] = pd.to_datetime(redcap['Chemotherapy Start Date'], errors='coerce', dayfirst=True)
+    redcap['Radiotherapy Start Date'] = pd.to_datetime(redcap['Radiotherapy Start Date'], errors='coerce')
+
+    # Group by Lab ID and identify treated patients
+    treated_lab_ids = []
+
+    for lab_id, group in redcap.groupby("Lab ID"):
+        resect_dates = group['Resection Date'].dropna().unique()
+        chemo_dates = group['Chemotherapy Start Date'].dropna().unique()
+        radio_dates = group['Radiotherapy Start Date'].dropna().unique()
+
+        if len(resect_dates) == 0 or len(chemo_dates) == 0 or len(radio_dates) == 0:
+            continue  # skip if any of the key dates are missing
+
+        # Check if any chemo or radio date is before any resection date
+        if any(c < r for r in resect_dates for c in chemo_dates) or any(c < r for r in resect_dates for c in radio_dates):
+            treated_lab_ids.append(lab_id)
+
+    # Append ' TREATED' to Diagnosis_final where Lab ID is in treated list
+    redcap['Diagnosis_final_long'] = redcap.apply(
+        lambda row: f"{row['Diagnosis_final']} TREATED" if row['Lab ID'] in treated_lab_ids and pd.notna(row['Diagnosis_final']) else row['Diagnosis_final'],
+        axis=1
+    )
+    # Define a mapping dictionary for replacements
+    replacement_map = {
+        "Dedifferentiated Liposarcoma": "DDLPS",
+        "Undifferentiated Pleomorphic Sarcoma": "UPS",
+        "Leiomyosarcoma (excluding Skin)": "LMS",
+        "Solitary Fibrous Tumour, Malignant": "SFT",
+        "Well-Differentiated Liposarcoma / Atypical Lipomatous Tumour": "WDLPS/ALT",
+        "Malignant Granular Cell Tumour": "Others",
+        "Endometrial Stromal Sarcoma (Low Grade, High Grade), Undifferentiated Uterine Sarcoma": "ESS",
+        "Myxofibrosarcoma (formerly Myxoid Malignant Fibrous Histiocytoma [Myxoid MFH])": "MFS",
+        "Low-Grade Fibromyxoid Sarcoma": "MFS",
+        "Myxoid/Round Cell Liposarcoma": "Others",
+        "Undifferentiated Round Cell Sarcoma":"Others",
+        "Liposarcoma, NOS": "LPS",
+        "Pleomorphic Liposarcoma":"Others",
+        "Synovial Sarcoma, NOS":"Others",
+        "Solitary Fibrous Tumour, Malignant":"SFT",
+        "Phyllodes Tumour":"Others",
+        "Malignant Peripheral Nerve Sheath Tumour":"Others",
+        "Pleomorphic Rhabdomyosarcoma":"Others",
+        "Desmoid Fibromatosis":"Others",
+        "Atypical Lipomatous Tumour":"WDLPS/ALT",
+        "Well-Differentiated Liposarcoma":"WDLPS",
+        "Well-Differentiated Liposarcoma and Dedifferentiated Liposarcoma":"WDLPS/DDLPS",
+        "Pleomorphic Liposarcoma":"Others",
+        "Malignant Peripheral Nerve Sheath Tumour":"Others"}
+    diagnosis_rows = redcap[redcap["Repeat Instrument"] == "Diagnosis Information at Study Site"].copy()
+    diagnosis_rows = diagnosis_rows.dropna(axis=1, how="all")
+    # Sort by REDCAP ID and Repeat Instance ascending
+    diagnosis_plot = diagnosis_rows.copy()
+    # Replace in-place
+    diagnosis_plot["Diagnosis_original"] = diagnosis_plot["Diagnosis_final"]
+    # Create a cleaned version to use for mapping (remove " - POST" or " - TREATED")
+
+    # Clean suffixes like " TREATED" or " POST" (with or without dash or space)
+    # Strip off 'POST' or 'TREATED' suffixes robustly
+    diagnosis_plot["Diagnosis_final"] = diagnosis_plot["Diagnosis_original"].str.replace( r"(\s*[-–]?\s*(TREATED))$", "", regex=True
+    ).str.strip()
+    diagnosis_plot["Diagnosis_final"] = diagnosis_plot["Diagnosis_final"].str.replace( r"(\s*[-–]?\s*(POST))$", "", regex=True
+    ).str.strip()
+    # Apply replacement mapping
+    diagnosis_plot["Diagnosis_final"] = diagnosis_plot["Diagnosis_final"].replace(replacement_map)
+    # Override GIST assignments
+    diagnosis_plot.loc[diagnosis_plot['Lab ID'].isin(['hSC68', 'hSC11', 'hSC07','hSC77']), 'Diagnosis_final'] = 'GIST'
+    # Fill any remaining NaNs
+    diagnosis_plot["Diagnosis_final_short"] = diagnosis_plot["Diagnosis_final"].fillna("Others")
+    # 1. Create a DataFrame with the values you want to merge
+    diagnosis_info = diagnosis_plot[["Lab ID", "Diagnosis_final_short"]].copy()
+    # 2. Drop duplicates to ensure one row per Lab ID
+    diagnosis_info = diagnosis_info.drop_duplicates(subset=["Lab ID"])
+    # 3. Merge into redcap
+    redcap = redcap.merge(diagnosis_info, on="Lab ID", how="left")
+    data = pd.merge(data_metadata, sample_metadata, on=["Patient ID","Sample ID","Specimen ID","Lab ID"], how="outer")
+    data_files = pd.merge(redcap, data, on=["Patient ID","Lab ID","Model Generated"], how="outer")
+
+    return patients, redcap, data_files
