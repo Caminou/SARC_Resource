@@ -23,18 +23,6 @@ def custom_date_parser(x):
     except Exception:
         return pd.NaT
 
-
-def update_dates_in_redcap(redcap, fixed_dates):
-    index_cols = ["REDCAP ID", "Repeat Instrument", "Repeat Instance"]
-    redcap = redcap.set_index(index_cols)
-    fixed_dates = fixed_dates.set_index(index_cols)
-
-    shared_cols = set(redcap.columns) & set(fixed_dates.columns)
-    shared_index = redcap.index.intersection(fixed_dates.index)
-
-    redcap.loc[shared_index, shared_cols] = fixed_dates.loc[shared_index, shared_cols]
-    return redcap.reset_index()
-
 def process_redcap_blocks(redcap):
     redcap = redcap.dropna(axis=1, how='all')
     demo = redcap[redcap["Repeat Instrument"] == "nan"].copy()
@@ -137,12 +125,10 @@ def load_data():
     patients = PDSC.merge(patients, on="Patient ID", how="left").drop(columns=["REDCAP ID_x"]).rename(columns={"REDCAP ID_y": "REDCAP ID"})
 
     ### Load REDCap & clean dates
-    redcap = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/redcap.csv", low_memory=False).rename(columns={"REDCap Record ID": "REDCAP ID"})
-    fixed_dates = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/NCCSDMOSarcomaMelano-SarcomaUpdatedRecord_DATA_LABELS_2025-04-02_1334_unlocked.csv", low_memory=False)
-    date_cols = [col for col in fixed_dates.columns if "date" in col.lower()]
-    fixed_dates = custom_date_parser(fixed_dates, date_cols)
-    redcap = update_dates_in_redcap(redcap, fixed_dates)
-    redcap = process_redcap_blocks(redcap)
+    redcap = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/20250807_redcap_corrected_dates.csv",low_memory=False, parse_dates=True, dayfirst=True)
+    date_cols = [col for col in redcap.columns if "date" in col.lower()]
+    for col in date_cols:
+        redcap[col] = pd.to_datetime(redcap[col], errors="coerce", dayfirst=True)
 
     ### Merge REDCap with patient map
     redcap = patients.merge(redcap, on="REDCAP ID", how="left").dropna(axis=1, how="all")
@@ -182,7 +168,11 @@ def load_data():
     redcap = simplify_diagnoses(redcap, treated_ids, replacement_map)
 
     ### Merge metadata
-    data = pd.merge(data_metadata, sample_metadata, on=["Patient ID", "Sample ID", "Specimen ID", "Lab ID"], how="outer")
-    data_files = pd.merge(redcap, data, on=["Patient ID", "Lab ID", "Model Generated"], how="outer")
-
-    return patients, redcap, data_files
+    data = pd.merge(data_metadata, sample_metadata, on=["Patient ID", "Sample ID", "Specimen ID"], how="outer")
+    data = pd.merge(data, patients, on=["Patient ID"],how="outer")
+    data_files = pd.merge(redcap, data, on=["Patient ID", "Lab ID"], how="outer")
+    date_cols = [col for col in redcap.columns if "date" in col.lower()]
+    for col in date_cols:
+        redcap[col] = pd.to_datetime(redcap[col], errors="coerce", dayfirst=True)
+        
+    return patients, redcap, data_files, data

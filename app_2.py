@@ -16,7 +16,7 @@ import network_utils
 from data_utils import load_data
 from plot_utils import plot_unique_patients
 from network_utils import create_network_graph
-
+from patient_history_plot import plot_lab_id_timeline
 # --- STREAMLIT APP FUNCTIONS ---
 # --- MAIN FUNCTION ---
 # Streamlit App
@@ -26,7 +26,6 @@ def main():
     # Load your data
     # Step 1: Load Data
     patients, redcap, data_files, metadata = load_data()
-
     
     # Step 3: Merge All Data
 
@@ -38,7 +37,6 @@ def main():
 
     # Set a Project-Patient Network
     st.header("Project-Patient Network")
-
 
     # Create and render the network graph
     net = create_network_graph(data_files)
@@ -64,9 +62,14 @@ def main():
 
     # Set a Project-Patient Network
     st.header("Sarcoma Resource Network: Mapping Patient-Project Connections")
-
+    data_files_plot = data_files[
+    data_files["Data Type"].notna() & (data_files["Data Type"] != "nan")]
+    data_files_plot = data_files_plot[
+    data_files_plot["Project ID"].notna() & (data_files_plot["Project ID"] != "nan")]
+    
     # Create a DataFrame for the network
-    df = pd.DataFrame(data_files[["Patient ID", "Project ID", "Data Type","Sample type"]])
+    df = pd.DataFrame(data_files_plot[["Patient ID", "Project ID", "Data Type","Sample type"]])
+    
     # Create and render the network graph
     net = create_network_graph(df)
     # Save the network graph as an HTML file
