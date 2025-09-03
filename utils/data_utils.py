@@ -21,7 +21,7 @@ def load_data():
         return value
 
     # Get all CSV file paths
-    csv_files = glob.glob(os.path.join("/mnt/c/Users/caminorsm/Desktop/Database/updated/data_metadata/data_metadata", "*.csv"))
+    csv_files = glob.glob(os.path.join("/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/data_metadata/", "*.csv"))
     # Read and concatenate all CSVs
     data_metadata = pd.concat((pd.read_csv(f) for f in csv_files), ignore_index=True)
     data_metadata = data_metadata.replace("NaN", "")
@@ -29,36 +29,93 @@ def load_data():
     # Some data modification for small mistakes
     data_metadata['Data Type'] = data_metadata['Data Type'].str.replace('in_vitro_dosing', 'in-vitro dosing', regex=False)
     data_metadata['Data Type'] = data_metadata['Data Type'].str.replace(' in-vitro dosing', 'in-vitro dosing', regex=False)
-    data_metadata["Lab ID"] = data_metadata["Lab ID"].apply(standardize_to_hSC)
-    
+    data_metadata=data_metadata.drop(columns=["Lab ID"])
     # Read sample_metadata (Sample_type (PDSC, tumor_frozen, FFP...))
-    sample_metadata = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/sample_metadata.csv")
+    sample_metadata = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/sample_metadata.csv")
     sample_metadata = sample_metadata.replace("NaN", "")
     sample_metadata["Lab ID"] = sample_metadata["Lab ID"].apply(standardize_to_hSC)
 
 
  #### = CREATE REDCAP DATA FILE = ####
     # Read patient metadata (hSC number, REDCAP ID, NCCS, omics)
-    patients = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/mapper.csv")
+    patients = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/mapper.csv")
     patients = patients.replace("NaN", "")
-    # Matching sheet (sample_ID, Redcap, hSC number + establishment of PDSC + biopsy date)
-    PDSC = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/Patient_Metadata_Matching_Sheet.csv")
-    # Rename column names to match redcap column names
-    PDSC = PDSC.rename(columns={'Redcap Number': 'REDCAP ID'})
-    PDSC = PDSC.rename(columns={'NCCS number/ID': 'Patient ID'})
-    PDSC = PDSC.replace("NaN", "")
-    ## Get only the samples which model has been generated
 
-    PDSC['REDCAP ID'] = PDSC['REDCAP ID'].astype(str)
-
+    ### = LOAD REDCAP DATA AND PARSE DATE AGAIN == ##
+    
     # Read redcap data (Demographics, Diagnosis and Treatment)
-    metadata = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/20250807_redcap_corrected_dates.csv",low_memory=False, parse_dates=True, dayfirst=True)
+    redcap = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/20250807_redcap_corrected_dates.csv", low_memory=False)
+    redcap = redcap.replace("NaN", "")
+    # Map Redcap_ID with the hSC
+    redcap = redcap.rename(columns={'REDCap Record ID': 'REDCAP ID'})
+
+    ### REDCAP WITH FIXED DATES
+    temp = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated/NCCSDMOSarcomaMelano-SarcomaUpdatedRecord_DATA_LABELS_2025-04-02_1334_unlocked.csv", nrows=0)
+    date_cols = [col for col in temp.columns if "date" in col.lower()]
+
+    # Function to apply uniform parsing
+    def custom_date_parser(x):
+        try:
+            return pd.to_datetime(x, format="%d/%m/%Y", errors="coerce")
+        except Exception:
+            return pd.NaT
+
+    # Load full file
+    sarcoma_fixed_dates = pd.read_csv(
+        "/mnt/c/Users/caminorsm/Desktop/Database/updated/NCCSDMOSarcomaMelano-SarcomaUpdatedRecord_DATA_LABELS_2025-04-02_1334_unlocked.csv",
+        low_memory=False
+    )
+
+    # Rename for consistency
+    sarcoma_fixed_dates = sarcoma_fixed_dates.rename(columns={"REDCap Record ID": "REDCAP ID"})
+
+    # Parse all detected date columns with consistent format
+    for col in date_cols:
+        sarcoma_fixed_dates[col] = sarcoma_fixed_dates[col].apply(custom_date_parser)
+
+    sarcoma_fixed_dates = sarcoma_fixed_dates.replace("NaN", "nan")
+
+    # Harmonize index types in both dataframes
+    for df in [redcap, sarcoma_fixed_dates]:
+        df["REDCAP ID"] = df["REDCAP ID"].astype(str).str.strip()
+        # DO NOT fill NaNs yet; preserve them for logic
+        df["Repeat Instrument"] = df["Repeat Instrument"].astype(str).str.strip()
+        # Keep Repeat Instance as-is, maybe cast to float to support NaN + ints
+        df["Repeat Instance"] = pd.to_numeric(df["Repeat Instance"], errors="coerce")
+
+    ### === UPDATE CORRECT DATES === ###
+    # Step 1: Set multi-index on both DataFrames
+    index_cols = ["REDCAP ID", "Repeat Instrument", "Repeat Instance"]
+    redcap_indexed = redcap.set_index(index_cols)
+    dates_indexed = sarcoma_fixed_dates.set_index(index_cols)
+
+    # Step 2: Identify shared date-related columns
+    date_cols = [col for col in redcap.columns if "date" in col.lower()]
+    date_cols_sarcoma = [col for col in sarcoma_fixed_dates.columns if "date" in col.lower()]
+    shared_date_cols = list(set(date_cols).intersection(date_cols_sarcoma))
+    shared_date_cols
+    # Step 3: Find overlapping row indices
+    shared_index = redcap_indexed.index.intersection(dates_indexed.index)
+
+    # Step 4: Update only those rows and columns
+    # Reset index and merge back on all three keys
+    # Step 1: Reset index and merge on all three keys
+    redcap_updated = redcap.merge(
+        sarcoma_fixed_dates[index_cols + shared_date_cols],
+        on=index_cols,
+        how="left",
+        suffixes=("", "_new")
+    )
+
+
+    # Final dataset
+    redcap = redcap_updated
+    ## = PROCESS REDCAP dropping down the demographic info to each row
 
     def process_redcap_data(redcap):
-        # Drop fully empty columns
         redcap_clean = redcap.dropna(axis=1, how='all')
         # Split demographics info (when Repeat Instrument is NaN)
-        patient_info = redcap_clean[redcap_clean["Repeat Instrument"] == "nan"].copy()
+        patient_info = redcap[redcap["Repeat Instrument"].isna()].copy()
         # Split diagnosis/treatment rows
         diagnosis_treatment = redcap_clean[
             redcap_clean["Repeat Instrument"].isin([
@@ -87,7 +144,7 @@ def load_data():
         final = final[redcap_clean.columns]
         return final
 
-    redcap = process_redcap_data(metadata)
+    redcap = process_redcap_data(redcap)
 
     ### == Reorder columns == ###
     index_cols = ["REDCAP ID", "Repeat Instrument", "Repeat Instance"]
@@ -97,22 +154,15 @@ def load_data():
 
     # Reorder columns
     redcap = redcap[index_cols + other_cols]
-
-    patients = PDSC.merge(patients,left_on=["Patient ID"], 
-                                    right_on=["Patient ID"],
-                                    how="left")
-
-    patients = patients.drop(columns=["REDCAP ID_x"])
-
-    # Rename 'REDCAP ID_y' to 'REDCAP ID'
-    patients = patients.rename(columns={"REDCAP ID_y": "REDCAP ID"})
-    redcap = patients.merge(redcap,left_on=["REDCAP ID"], 
-                                    right_on=["REDCAP ID"],
-                                    how="left")
-
     # drop empty redcap columns to reduce size of the table
     redcap = redcap.dropna(axis=1, how="all")
-
+    ## Add Patient information using the matching patient_metadata sheet
+    demographics = pd.merge(patients, redcap, on =["REDCAP ID"], how="outer")
+    ## create a data df using the data_metadata and the sample_metadata
+    data = pd.merge(data_metadata, sample_metadata, on=["Patient ID","Sample ID","Specimen ID"], how="outer")
+    ## merge everything together based on the common Patient ID number
+    all_data=pd.merge(demographics, data, on=["Patient ID"], how="outer")
+    
  #### == FIX correct diagnosis and grade for the Lab ID == ##
     def get_final_diagnosis(path_diag, comp_path_diag):
         if path_diag == "Others":
@@ -122,9 +172,10 @@ def load_data():
                 return comp_path_diag
         return path_diag
 
+### Function to determine the diagnosis observed right after the time of Biopsy/Resection of the specific Patient ID _Lab ID sample
     def assign_final_diagnosis(df):
         diag_df = df[df['Repeat Instrument'] == 'Diagnosis Information at Study Site'].copy()
-
+        
         # Convert dates
         diag_df['Date of Final Pathologic Diagnosis'] = pd.to_datetime(
             diag_df['Date of Final Pathologic Diagnosis'], errors='coerce', dayfirst=True
@@ -140,7 +191,6 @@ def load_data():
                 diag_df['Date of Final Pathologic Diagnosis'], diag_df['Resection Date']
             )
         ]
-
         final_diagnosis = {}
 
         for lab_id, group in diag_df.groupby('Lab ID'):
@@ -184,7 +234,7 @@ def load_data():
         # Assign the results back
         df['Diagnosis_final'] = df['Lab ID'].map(final_diagnosis)
         return df
-
+    
     def assign_final_grade(df):
         diag_df = df[df['Repeat Instrument'] == 'Diagnosis Information at Study Site'].copy()
 
@@ -203,7 +253,6 @@ def load_data():
                 diag_df['Date of Final Pathologic Diagnosis'], diag_df['Resection Date']
             )
         ]
-
         final_diagnosis = {}
 
         for lab_id, group in diag_df.groupby('Lab ID'):
@@ -243,25 +292,25 @@ def load_data():
         df['Grade_final'] = df['Lab ID'].map(final_diagnosis)
         return df
     
-    diagnosis_rows = redcap[redcap["Repeat Instrument"] == "Diagnosis Information at Study Site"].copy()
+    diagnosis_rows = all_data[all_data["Repeat Instrument"] == "Diagnosis Information at Study Site"].copy()
 
     ## FIX Diagnosis information
-    diagnosis_rows = diagnosis_rows.dropna(axis=1, how="all")
+    
     diagnosis_fix = assign_final_diagnosis(diagnosis_rows)
     diagnosis_fix = assign_final_grade(diagnosis_fix)
     final_diagnosis_df = diagnosis_fix[['Lab ID', 'Diagnosis_final','Grade_final']].drop_duplicates()
     # Merge into redcap_df on Lab ID
-    redcap = redcap.merge(final_diagnosis_df, on='Lab ID', how='left')
+    all_data = all_data.merge(final_diagnosis_df, on='Lab ID', how='left')
 
     # Convert date columns if not already done
-    redcap['Resection Date'] = pd.to_datetime(redcap['Resection Date'], errors='coerce', dayfirst=True)
-    redcap['Chemotherapy Start Date'] = pd.to_datetime(redcap['Chemotherapy Start Date'], errors='coerce', dayfirst=True)
-    redcap['Radiotherapy Start Date'] = pd.to_datetime(redcap['Radiotherapy Start Date'], errors='coerce')
+    all_data['Resection Date'] = pd.to_datetime(all_data['Resection Date'], errors='coerce', dayfirst=True)
+    all_data['Chemotherapy Start Date'] = pd.to_datetime(all_data['Chemotherapy Start Date'], errors='coerce', dayfirst=True)
+    all_data['Radiotherapy Start Date'] = pd.to_datetime(all_data['Radiotherapy Start Date'], errors='coerce')
 
     # Group by Lab ID and identify treated patients
     treated_lab_ids = []
 
-    for lab_id, group in redcap.groupby("Lab ID"):
+    for lab_id, group in all_data.groupby("Lab ID"):
         resect_dates = group['Resection Date'].dropna().unique()
         chemo_dates = group['Chemotherapy Start Date'].dropna().unique()
         radio_dates = group['Radiotherapy Start Date'].dropna().unique()
@@ -274,7 +323,7 @@ def load_data():
             treated_lab_ids.append(lab_id)
 
     # Append ' TREATED' to Diagnosis_final where Lab ID is in treated list
-    redcap['Diagnosis_final_long'] = redcap.apply(
+    all_data['Diagnosis_final_long'] = all_data.apply(
         lambda row: f"{row['Diagnosis_final']} TREATED" if row['Lab ID'] in treated_lab_ids and pd.notna(row['Diagnosis_final']) else row['Diagnosis_final'],
         axis=1
     )
@@ -304,8 +353,8 @@ def load_data():
         "Well-Differentiated Liposarcoma and Dedifferentiated Liposarcoma":"WDLPS/DDLPS",
         "Pleomorphic Liposarcoma":"Others",
         "Malignant Peripheral Nerve Sheath Tumour":"Others"}
-    diagnosis_rows = redcap[redcap["Repeat Instrument"] == "Diagnosis Information at Study Site"].copy()
-    diagnosis_rows = diagnosis_rows.dropna(axis=1, how="all")
+    diagnosis_rows = all_data[all_data["Repeat Instrument"] == "Diagnosis Information at Study Site"].copy()
+    
     # Sort by REDCAP ID and Repeat Instance ascending
     diagnosis_plot = diagnosis_rows.copy()
     # Replace in-place
@@ -329,12 +378,6 @@ def load_data():
     # 2. Drop duplicates to ensure one row per Lab ID
     diagnosis_info = diagnosis_info.drop_duplicates(subset=["Lab ID"])
     # 3. Merge into redcap
-    redcap = redcap.merge(diagnosis_info, on="Lab ID", how="left")
-    data = pd.merge(data_metadata, sample_metadata, on=["Patient ID","Sample ID","Specimen ID"], how="outer")
-    all_data=pd.merge(data, patients, on=["Patient ID"], how="outer")
+    all_data = all_data.merge(diagnosis_info, on="Lab ID", how="left")
 
-    data_files = pd.merge(redcap, all_data, on=["Patient ID","Lab ID"], how="outer")
-
-    return patients, redcap, data_files, all_data
-
-    
+    return patients, redcap, all_data
