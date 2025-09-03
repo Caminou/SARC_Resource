@@ -20,18 +20,45 @@ def load_data():
             return f"hSC{match.group(1)}"
         return value
 
-    # Get all CSV file paths
-    csv_files = glob.glob(os.path.join("/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/data_metadata/", "*.csv"))
-    # Read and concatenate all CSVs
-    data_metadata = pd.concat((pd.read_csv(f) for f in csv_files), ignore_index=True)
+        xls_files = glob.glob(os.path.join(
+        "/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/data_metadata/",
+        "*.xlsx"
+    ))
+    xls_files = glob.glob(os.path.join(
+        "/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/data_metadata/",
+        "*.xlsx"
+    ))
+    dfs = []
+    for f in xls_files:
+        df = pd.read_excel(f, engine="openpyxl")
+
+        # Normalize column names (strip spaces, unify underscores)
+        df.columns = df.columns.str.strip().str.replace("_", " ")
+
+        # If both "Data_type" and "Data Type" exist, merge them
+        if "Data_type" in df.columns and "Data Type" not in df.columns:
+            df = df.rename(columns={"Data_type": "Data Type"})
+        elif "Data_type" in df.columns and "Data Type" in df.columns:
+            df["Data Type"] = df["Data Type"].fillna(df["Data_type"])
+            df = df.drop(columns=["Data_type"])
+
+        dfs.append(df)
+
+    # Concatenate all Excel sheets
+    data_metadata = pd.concat(dfs, ignore_index=True)
+
+    # Replace string "NaN" with empty
     data_metadata = data_metadata.replace("NaN", "")
 
-    # Some data modification for small mistakes
-    data_metadata['Data Type'] = data_metadata['Data Type'].str.replace('in_vitro_dosing', 'in-vitro dosing', regex=False)
-    data_metadata['Data Type'] = data_metadata['Data Type'].str.replace(' in-vitro dosing', 'in-vitro dosing', regex=False)
+    # Small fixes
+    data_metadata['Data Type'] = (
+        data_metadata['Data Type']
+        .str.replace('in_vitro_dosing', 'in-vitro dosing', regex=False)
+        .str.replace(' in-vitro dosing', 'in-vitro dosing', regex=False)
+    )
     data_metadata=data_metadata.drop(columns=["Lab ID"])
     # Read sample_metadata (Sample_type (PDSC, tumor_frozen, FFP...))
-    sample_metadata = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/sample_metadata.csv")
+    sample_metadata = pd.read_excel("/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/sample_metadata.xlsx")
     sample_metadata = sample_metadata.replace("NaN", "")
     sample_metadata["Lab ID"] = sample_metadata["Lab ID"].apply(standardize_to_hSC)
 
