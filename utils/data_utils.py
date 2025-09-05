@@ -19,8 +19,7 @@ def load_data():
         if match:
             return f"hSC{match.group(1)}"
         return value
-
-        xls_files = glob.glob(os.path.join(
+    xls_files = glob.glob(os.path.join(
         "/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/data_metadata/",
         "*.xlsx"
     ))
@@ -72,7 +71,7 @@ def load_data():
     
     # Read redcap data (Demographics, Diagnosis and Treatment)
     redcap = pd.read_csv("/mnt/c/Users/caminorsm/Desktop/Database/updated_after_holidays/20250807_redcap_corrected_dates.csv", low_memory=False)
-    redcap = redcap.replace("NaN", "")
+    redcap = redcap.replace({"nan": pd.NA, "NaN": pd.NA, "": pd.NA})
     # Map Redcap_ID with the hSC
     redcap = redcap.rename(columns={'REDCap Record ID': 'REDCAP ID'})
 
@@ -115,7 +114,6 @@ def load_data():
     index_cols = ["REDCAP ID", "Repeat Instrument", "Repeat Instance"]
     redcap_indexed = redcap.set_index(index_cols)
     dates_indexed = sarcoma_fixed_dates.set_index(index_cols)
-
     # Step 2: Identify shared date-related columns
     date_cols = [col for col in redcap.columns if "date" in col.lower()]
     date_cols_sarcoma = [col for col in sarcoma_fixed_dates.columns if "date" in col.lower()]
@@ -138,40 +136,64 @@ def load_data():
     # Final dataset
     redcap = redcap_updated
     ## = PROCESS REDCAP dropping down the demographic info to each row
+    def process_redcap_data(redcap, verbose=True):
+        # Normalize missing values
+        redcap = redcap.replace({"nan": pd.NA, "NaN": pd.NA, "": pd.NA})
 
-    def process_redcap_data(redcap):
-        redcap_clean = redcap.dropna(axis=1, how='all')
-        # Split demographics info (when Repeat Instrument is NaN)
+        start_rows = len(redcap)
+        start_ids = redcap["REDCAP ID"].nunique()
+
+        
+
+        # Split demographics info (Repeat Instrument is NaN)
         patient_info = redcap[redcap["Repeat Instrument"].isna()].copy()
+
+        # Fill missing values within demographics rows (forward/backward per patient)
+        demo_cols = [c for c in patient_info.columns if c != "REDCAP ID"]
+        patient_info[demo_cols] = patient_info.groupby("REDCAP ID")[demo_cols].ffill().bfill()
+
         # Split diagnosis/treatment rows
-        diagnosis_treatment = redcap_clean[
-            redcap_clean["Repeat Instrument"].isin([
+        diagnosis_treatment = redcap[
+            redcap["Repeat Instrument"].isin([
                 "Diagnosis Information at Study Site",
                 "Treatment at Study Site"
             ])
         ].copy()
-        # Drop fully empty columns in diagnosis/treatment
         diagnosis_treatment = diagnosis_treatment.dropna(axis=1, how='all')
-        # Merge to add patient_info to diagnosis/treatment rows
-        # Only keep columns from redcap_clean (i.e., original set of 307 columns)
+
+        # Merge demographics into diagnosis/treatment rows
         merged = diagnosis_treatment.merge(
-            patient_info.drop(columns=["Repeat Instrument"]),  # don't override 'Repeat Instrument'
+            patient_info.drop(columns=["Repeat Instrument"]),
             on="REDCAP ID",
             how="left",
-            suffixes=("", "_demo")  # prevent _x/_y
+            suffixes=("", "_demo")
         )
-        # Fill missing demographic columns in diagnosis_treatment using patient_info 
-        for col in patient_info.columns:
-            if col != "REDCAP ID" and col in merged.columns and col + "_demo" in merged.columns:
-                merged[col] = merged[col].combine_first(merged[col + "_demo"])
-                merged = merged.drop(columns=[col + "_demo"])
-        # Now combine all: demographics + enriched diagnosis/treatment
-        final = pd.concat([patient_info, merged], ignore_index=True)
-        # Keep only columns from redcap_clean (i.e., 307 columns)
-        final = final[redcap_clean.columns]
-        return final
 
+        # Fill missing demographic columns in diagnosis/treatment rows
+        for col in demo_cols:
+            if col in merged.columns and col + "_demo" in merged.columns:
+                merged[col] = merged[col].combine_first(merged[col + "_demo"])
+                merged.drop(columns=[col + "_demo"], inplace=True)
+
+        # Combine demographics + enriched diagnosis/treatment
+        all_cols = sorted(set(redcap.columns) | set(merged.columns))
+        final = pd.concat([patient_info, merged], ignore_index=True)
+        final = final.reindex(columns=all_cols)
+
+        if verbose:
+            end_rows = len(final)
+            end_ids = final["REDCAP ID"].nunique()
+            print(f"process_redcap_data():")
+            print(f"  Rows before: {start_rows:,} → after: {end_rows:,}")
+            print(f"  Unique REDCAP IDs before: {start_ids:,} → after: {end_ids:,}")
+            missing_ids = set(redcap["REDCAP ID"].unique()) - set(final["REDCAP ID"].unique())
+            if missing_ids:
+                print(f"  ⚠️ Missing REDCAP IDs: {len(missing_ids)} → {list(missing_ids)[:5]}...")
+            return final
+
+    # Run
     redcap = process_redcap_data(redcap)
+
 
     ### == Reorder columns == ###
     index_cols = ["REDCAP ID", "Repeat Instrument", "Repeat Instance"]
@@ -182,7 +204,6 @@ def load_data():
     # Reorder columns
     redcap = redcap[index_cols + other_cols]
     # drop empty redcap columns to reduce size of the table
-    redcap = redcap.dropna(axis=1, how="all")
     ## Add Patient information using the matching patient_metadata sheet
     demographics = pd.merge(patients, redcap, on =["REDCAP ID"], how="outer")
     ## create a data df using the data_metadata and the sample_metadata
@@ -380,6 +401,7 @@ def load_data():
         "Well-Differentiated Liposarcoma and Dedifferentiated Liposarcoma":"WDLPS/DDLPS",
         "Pleomorphic Liposarcoma":"Others",
         "Malignant Peripheral Nerve Sheath Tumour":"Others"}
+    
     diagnosis_rows = all_data[all_data["Repeat Instrument"] == "Diagnosis Information at Study Site"].copy()
     
     # Sort by REDCAP ID and Repeat Instance ascending
